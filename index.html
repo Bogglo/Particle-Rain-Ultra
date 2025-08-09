@@ -1,0 +1,416 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Particle Rain — Ultra Performance (Canvas)</title>
+<style>
+  :root{
+    --bg:#0b1220;
+    --panel: rgba(255,255,255,0.06);
+    --accent: #6ee7b7;
+    --muted: rgba(255,255,255,0.7);
+  }
+  html,body{height:100%;margin:0;font-family:system-ui,-apple-system,Segoe UI, Roboto,"Noto Sans",sans-serif;background:var(--bg);color:#fff}
+  #stage{position:fixed;inset:0;display:block;background:linear-gradient(180deg,#071021 0%, #0b1220 100%);}
+  .ui{
+    position:fixed; right:12px; top:12px; width:340px;
+    background:var(--panel); backdrop-filter: blur(8px); border-radius:14px; padding:14px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.6); z-index:9999;
+  }
+  h3{margin:0 0 10px 0;font-size:18px}
+  .row{display:flex;gap:10px;align-items:center;margin:8px 0}
+  button{flex:1;padding:10px 12px;border-radius:10px;border:0;background:#111827;color:white;font-weight:700;cursor:pointer}
+  button.secondary{background:transparent;border:1px solid rgba(255,255,255,0.12);font-weight:600}
+  .small{font-size:14px;color:var(--muted)}
+  input[type=range]{width:100%}
+  .status{display:flex;justify-content:space-between;gap:10px;margin-top:10px;font-size:14px}
+  .badge{background:rgba(255,255,255,0.07);padding:7px 10px;border-radius:10px;font-weight:700}
+  .credits{font-size:13px;color:var(--muted);margin-top:12px;text-align:center}
+  .warn{color:#ffd966;font-size:13px;margin-top:8px}
+  label.inline{display:flex;justify-content:space-between;align-items:center}
+  @media (max-width:420px){ .ui{width:96%;left:2%;right:2%;} }
+</style>
+</head>
+<body>
+  <canvas id="stage"></canvas>
+
+  <div class="ui" id="ui">
+    <h3>Particle Rain — Ultra Performance</h3>
+
+    <div class="row">
+      <button id="startBtn">Start</button>
+      <button id="stopBtn" class="secondary">Stop</button>
+    </div>
+
+    <div class="row">
+      <button id="stressBtn">Ultra Stress</button>
+      <button id="clearBtn" class="secondary">Clear</button>
+    </div>
+
+    <div style="margin-top:10px">
+      <label class="small inline">Max particles: <strong id="maxLabel">2,000,000</strong></label>
+      <input id="maxRange" type="range" min="1000" max="2000000" step="1000" value="2000000" />
+      <div class="small">Note: UI allows up to 2,000,000. Values above 1M may slow or overheat devices.</div>
+    </div>
+
+    <div style="margin-top:10px">
+      <label class="small inline">Burst size (spawn at click): <strong id="burstLabel">5000</strong></label>
+      <input id="burstRange" type="range" min="10" max="50000" step="10" value="5000" />
+    </div>
+
+    <div style="margin-top:10px">
+      <label class="small inline">Gravity: <strong id="gravLabel">0.50</strong></label>
+      <input id="gravRange" type="range" min="0" max="5" step="0.01" value="0.5" />
+    </div>
+
+    <div style="margin-top:10px">
+      <label class="small inline">Wind (vx): <strong id="windLabel">0.00</strong></label>
+      <input id="windRange" type="range" min="-4" max="4" step="0.01" value="0" />
+    </div>
+
+    <div style="margin-top:10px">
+      <label class="small inline">Particle size: <strong id="sizeLabel">2–8</strong></label>
+      <input id="sizeMin" type="range" min="1" max="20" step="1" value="2" />
+      <input id="sizeMax" type="range" min="1" max="30" step="1" value="8" />
+    </div>
+
+    <div class="status">
+      <div class="badge">FPS: <span id="fps">0</span></div>
+      <div class="badge">Particles: <span id="count">0</span></div>
+    </div>
+
+    <div class="warn" id="warn">Ultra mode: Setting extremely high values may freeze or crash your device. Auto-throttle will try to recover.</div>
+
+    <div class="credits">Tap the screen to spawn a burst. Long press for continuous bursts. Auto-throttle engages if FPS drops. Designed for 1–2 FPS minimum even under extreme load.</div>
+  </div>
+
+<script>
+/*
+  Ultra high-performance particle canvas.
+  - Logical particle limit up to 2,000,000 (user-selectable)
+  - Burst spawn adjustable up to 50,000
+  - Safety: auto-throttle, draw-sampling, pooling, pause when hidden
+  - Designed to run even at 1 FPS under heavy load, using aggressive sampling.
+*/
+
+// Canvas & context
+const canvas = document.getElementById('stage');
+const ctx = canvas.getContext('2d', { alpha: true });
+let DPR = Math.max(1, window.devicePixelRatio || 1);
+
+// UI
+const startBtn = document.getElementById('startBtn');
+const stopBtn = document.getElementById('stopBtn');
+const stressBtn = document.getElementById('stressBtn');
+const clearBtn = document.getElementById('clearBtn');
+const fpsEl = document.getElementById('fps');
+const countEl = document.getElementById('count');
+const maxRange = document.getElementById('maxRange');
+const maxLabel = document.getElementById('maxLabel');
+const burstRange = document.getElementById('burstRange');
+const burstLabel = document.getElementById('burstLabel');
+const gravRange = document.getElementById('gravRange');
+const gravLabel = document.getElementById('gravLabel');
+const windRange = document.getElementById('windRange');
+const windLabel = document.getElementById('windLabel');
+const sizeMin = document.getElementById('sizeMin');
+const sizeMax = document.getElementById('sizeMax');
+const sizeLabel = document.getElementById('sizeLabel');
+const warnEl = document.getElementById('warn');
+
+// Settings
+let MAX_PARTICLES = parseInt(maxRange.value, 10); // up to 2M
+let BURST_SIZE = parseInt(burstRange.value, 10); // up to 50k
+let GRAVITY = parseFloat(gravRange.value);
+let WIND = parseFloat(windRange.value);
+let SIZE_MIN = parseInt(sizeMin.value,10);
+let SIZE_MAX = parseInt(sizeMax.value,10);
+
+// Safety & performance parameters (internal)
+const HARD_SOFT_RENDER_LIMIT = 220000; // above this we sample-render
+const ULTRA_SOFT_RENDER_LIMIT = 900000; // above this, only render fraction of particles
+const AUTO_THROTTLE_FPS = 20; // if fps < this, auto-reduce spawn rate and draw ratio
+let running = false;
+let stressMode = false;
+let lastTime = performance.now();
+let rafId = null;
+let stageW = 0, stageH = 0;
+
+// Particle storage
+let particles = []; // active particles
+let pool = [];      // recycled particle objects
+
+function resize() {
+  DPR = Math.max(1, window.devicePixelRatio || 1);
+  canvas.width = Math.floor(window.innerWidth * DPR);
+  canvas.height = Math.floor(window.innerHeight * DPR);
+  canvas.style.width = window.innerWidth + 'px';
+  canvas.style.height = window.innerHeight + 'px';
+  ctx.setTransform(DPR,0,0,DPR,0,0);
+  stageW = window.innerWidth;
+  stageH = window.innerHeight;
+}
+window.addEventListener('resize', resize);
+resize();
+
+// Utility: create or reuse particle
+function getParticle(){
+  if (pool.length) return pool.pop();
+  return {
+    x:0,y:0,vx:0,vy:0,size:2,life:0,maxLife:999,color:'#fff',rot:0,vr:0
+  };
+}
+
+// spawn function: n particles at x (if x undefined -> random)
+function spawn(n=1, x=null, y=null){
+  const canCreate = Math.max(0, MAX_PARTICLES - particles.length);
+  if (canCreate <= 0) return;
+  const toCreate = Math.min(n, canCreate);
+  for (let i=0;i<toCreate;i++){
+    const p = getParticle();
+    p.x = (x !== null) ? x : Math.random()*stageW;
+    p.y = (y !== null) ? y : -10 - Math.random()*60;
+    p.vx = WIND + (Math.random()*2.4 - 1.2);
+    p.vy = Math.random()*1.2 + 0.8;
+    p.size = SIZE_MIN + Math.random()*(SIZE_MAX - SIZE_MIN);
+    p.life = 0;
+    p.maxLife = 10000;
+    // ultra color pick
+    const colors = ['#2563eb','#f43f5e','#f59e42','#10b981','#60a5fa','#fca5a5','#fef08a','#a21caf'];
+    p.color = colors[(Math.random()*colors.length)|0];
+    p.rot = Math.random()*360;
+    p.vr = (Math.random()*3-1.5);
+    particles.push(p);
+  }
+}
+
+// Input: tap to spawn burst
+let pointerDown = false;
+let pointerX = 0, pointerY = 0;
+canvas.addEventListener('pointerdown', (ev)=>{
+  pointerDown = true;
+  const r = canvas.getBoundingClientRect();
+  pointerX = (ev.clientX - r.left);
+  pointerY = (ev.clientY - r.top);
+  spawn(BURST_SIZE, pointerX, pointerY);
+});
+canvas.addEventListener('pointerup', ()=> pointerDown = false);
+canvas.addEventListener('pointercancel', ()=> pointerDown = false);
+canvas.addEventListener('pointermove', (ev)=>{
+  if (!pointerDown) return;
+  const r = canvas.getBoundingClientRect();
+  pointerX = (ev.clientX - r.left);
+  pointerY = (ev.clientY - r.top);
+  spawn(Math.min(2000, BURST_SIZE), pointerX, pointerY);
+});
+
+// Controls wiring
+startBtn.addEventListener('click', ()=>{
+  if (running) return;
+  running = true;
+  lastTime = performance.now();
+  if (!rafId) rafId = requestAnimationFrame(loop);
+});
+stopBtn.addEventListener('click', ()=>{
+  running = false;
+  stressMode = false;
+});
+stressBtn.addEventListener('click', ()=>{
+  running = true;
+  stressMode = true;
+  lastTime = performance.now();
+  if (!rafId) rafId = requestAnimationFrame(loop);
+});
+clearBtn.addEventListener('click', ()=>{
+  for (let p of particles) pool.push(p);
+  particles.length = 0;
+  updateCountUI();
+});
+
+maxRange.addEventListener('input',(e)=>{
+  MAX_PARTICLES = parseInt(e.target.value,10);
+  maxLabel.textContent = MAX_PARTICLES.toLocaleString();
+  while (particles.length > MAX_PARTICLES){
+    pool.push(particles.shift());
+  }
+  updateCountUI();
+});
+burstRange.addEventListener('input',(e)=>{
+  BURST_SIZE = parseInt(e.target.value,10);
+  burstLabel.textContent = BURST_SIZE.toLocaleString();
+});
+gravRange.addEventListener('input',(e)=>{
+  GRAVITY = parseFloat(e.target.value);
+  gravLabel.textContent = GRAVITY.toFixed(2);
+});
+windRange.addEventListener('input',(e)=>{
+  WIND = parseFloat(e.target.value);
+  windLabel.textContent = WIND.toFixed(2);
+});
+sizeMin.addEventListener('input', updateSizeLabel);
+sizeMax.addEventListener('input', updateSizeLabel);
+function updateSizeLabel(){
+  SIZE_MIN = parseInt(sizeMin.value,10);
+  SIZE_MAX = parseInt(sizeMax.value,10);
+  if (SIZE_MIN > SIZE_MAX){
+    const t = SIZE_MIN; SIZE_MIN = SIZE_MAX; SIZE_MAX = t;
+    sizeMin.value = SIZE_MIN; sizeMax.value = SIZE_MAX;
+  }
+  sizeLabel.textContent = `${SIZE_MIN}–${SIZE_MAX}`;
+}
+
+// Pause on hidden tab
+document.addEventListener('visibilitychange', ()=>{
+  if (document.hidden){
+    running = false;
+    stressMode = false;
+  }
+});
+
+// FPS calculation (smoothed)
+let frames = 0, accum = 0, lastFPSUpdate = performance.now(), fps = 0;
+
+// Auto-throttle variables
+let spawnPauseFrames = 0;
+let sampleDrawRatio = 1.0; // fraction of particles actually drawn (1.0 -> draw all)
+let ultraDrawRatio = 1.0; // for ultra-high mode
+
+function loop(now){
+  rafId = null;
+  const dtMs = Math.min(200, now - lastTime); // allow long frame
+  const dt = dtMs / 1000.0;
+  lastTime = now;
+
+  // FPS measurement (every 600ms)
+  frames++;
+  accum += dtMs;
+  if (accum >= 600){
+    fps = Math.round((frames * 1000) / accum);
+    fpsEl.textContent = fps;
+    frames = 0;
+    accum = 0;
+    // if fps low, auto-throttle spawn and sampling
+    if (fps < AUTO_THROTTLE_FPS){
+      sampleDrawRatio = Math.max(0.01, sampleDrawRatio * 0.68);
+      ultraDrawRatio = Math.max(0.003, ultraDrawRatio * 0.68);
+      spawnPauseFrames = Math.max(spawnPauseFrames, 40);
+      warnEl.textContent = 'Auto-throttle engaged (low FPS). Drawing fewer particles to keep UI alive.';
+    } else {
+      sampleDrawRatio = Math.min(1.0, sampleDrawRatio + 0.04);
+      ultraDrawRatio = Math.min(1.0, ultraDrawRatio + 0.02);
+      if (spawnPauseFrames > 0) spawnPauseFrames = Math.max(0, spawnPauseFrames - 8);
+      warnEl.textContent = 'Ultra tip: Don\'t push device limits. Auto-throttle protects the UI.';
+    }
+  }
+
+  // If stress mode and not paused, spawn aggressively
+  if (running && stressMode && spawnPauseFrames === 0){
+    const cap = Math.min(25000, MAX_PARTICLES - particles.length);
+    if (cap > 0) spawn(Math.min(cap, 9000));
+  }
+
+  if (pointerDown && spawnPauseFrames === 0 && running){
+    spawn(Math.min(6000, BURST_SIZE), pointerX, pointerY);
+  }
+
+  if (spawnPauseFrames > 0) spawnPauseFrames--;
+
+  // Physics update
+  const count = particles.length;
+  for (let i = count - 1; i >= 0; i--){
+    const p = particles[i];
+    p.vy += GRAVITY * dt * 60 * 0.018;
+    p.vx += WIND * dt * 60 * 0.018;
+    p.x += p.vx * dt * 60;
+    p.y += p.vy * dt * 60;
+    p.rot += p.vr * dt * 60;
+
+    if (p.y > stageH + 300 || p.x < -300 || p.x > stageW + 300){
+      pool.push(p);
+      particles.splice(i,1);
+    }
+  }
+
+  updateCountUI();
+
+  // DRAW: clear and draw particles. Above certain limits, sample even more aggressively
+  ctx.clearRect(0,0,stageW,stageH);
+
+  const total = particles.length;
+  let drawCount = total;
+  let sampleRatio = 1.0;
+
+  if (total > ULTRA_SOFT_RENDER_LIMIT){
+    const overloadFactor = Math.min(22, total / ULTRA_SOFT_RENDER_LIMIT);
+    sampleRatio = ultraDrawRatio / overloadFactor;
+    drawCount = Math.ceil(total * sampleRatio);
+  } else if (total > HARD_SOFT_RENDER_LIMIT){
+    const overloadFactor = Math.min(12, total / HARD_SOFT_RENDER_LIMIT);
+    sampleRatio = sampleDrawRatio / overloadFactor;
+    drawCount = Math.ceil(total * sampleRatio);
+  }
+
+  if (drawCount >= total){
+    for (let i=0;i<total;i++){
+      drawParticle(particles[i]);
+    }
+  } else {
+    const step = Math.max(1, Math.floor(total / drawCount));
+    for (let i=0;i<total;i+=step){
+      drawParticle(particles[i]);
+    }
+    ctx.save();
+    ctx.font = '13px system-ui';
+    ctx.fillStyle = 'rgba(255,255,255,0.8)';
+    ctx.fillText(`Drawn ${Math.floor(drawCount).toLocaleString()} / ${total.toLocaleString()}`, 14, 24);
+    ctx.restore();
+  }
+
+  // loop control
+  if (running || particles.length > 0){
+    rafId = requestAnimationFrame(loop);
+  }
+}
+
+// draw a single particle (simple circle with rotation simulated as small ellipse)
+function drawParticle(p){
+  ctx.save();
+  ctx.translate(p.x, p.y);
+  if (p.rot !== 0) ctx.rotate(p.rot * Math.PI / 180);
+  ctx.beginPath();
+  ctx.fillStyle = p.color;
+  ctx.arc(0, 0, Math.max(1, p.size/2), 0, Math.PI*2);
+  ctx.fill();
+  ctx.restore();
+}
+
+function updateCountUI(){
+  countEl.textContent = particles.length.toLocaleString();
+}
+
+// initial ambient spawn
+spawn(600);
+
+// start loop but not spawning until user hits start
+running = true;
+rafId = requestAnimationFrame(loop);
+
+// Clean up on unload
+window.addEventListener('beforeunload', ()=>{
+  running = false;
+  particles.length = 0;
+  pool.length = 0;
+});
+
+// expose some functions for console debugging (optional)
+window._PARTICLE_TOOL = {
+  spawn, getParticle, particles, pool, setMax(n){
+    MAX_PARTICLES = Math.min(2000000, Math.max(1000, n|0));
+    maxRange.value = MAX_PARTICLES;
+    maxLabel.textContent = MAX_PARTICLES.toLocaleString();
+  }
+};
+</script>
+</body>
+</html>
