@@ -15,7 +15,7 @@ Includes auto-throttle and smart sampling so the UI stays responsive even at ver
 
 ## Usage
 
-1. Open `particle-rain-ultra.html` in your browser.
+1. Open `index.html` in your browser.
 2. Use the UI to configure particle count, burst size, gravity, wind, and particle size.
 3. Start, stop, stress, or clear particles from the control panel.
 4. Tap/click on the canvas to spawn bursts. Long press for continuous bursts.
